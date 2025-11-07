@@ -1,22 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D Depth Particles</title>
-  <style>
-    html, body {
-      margin: 0;
-      height: 100%;
-      overflow: hidden;
-      background: radial-gradient(circle at center, #000010, #000);
-    }
-    canvas {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
-  </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D Depth Particles (Touch-Enabled)</title>
+    <style>
+        html, body {
+            margin: 0;
+            height: 100%;
+            overflow: hidden;
+            background: radial-gradient(circle at center, #000010, #000);
+            /* Prevent default touch actions like pull-to-refresh on some devices */
+            touch-action: none; 
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
 </head>
 <body>
 <canvas id="glcanvas"></canvas>
@@ -29,9 +31,9 @@ canvas.width = innerWidth;
 canvas.height = innerHeight;
 
 window.addEventListener('resize', () => {
-  canvas.width = innerWidth;
-  canvas.height = innerHeight;
-  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    canvas.width = innerWidth;
+    canvas.height = innerHeight;
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
 });
 
 const vsSource = `#version 300 es
@@ -42,10 +44,11 @@ uniform mat4 uView;
 uniform float uPointSize;
 out float vDepth;
 void main() {
-  vec4 viewPos = uView * vec4(aPos, 1.0);
-  vDepth = -viewPos.z;
-  gl_Position = uProjection * viewPos;
-  gl_PointSize = uPointSize / (vDepth * 0.2);
+    vec4 viewPos = uView * vec4(aPos, 1.0);
+    vDepth = -viewPos.z;
+    gl_Position = uProjection * viewPos;
+    // Scale point size inversely proportional to depth, and slightly less aggressively
+    gl_PointSize = uPointSize / (vDepth * 0.2); 
 }
 `;
 
@@ -54,21 +57,23 @@ precision highp float;
 in float vDepth;
 out vec4 fragColor;
 void main() {
-  float t = clamp(vDepth / 50.0, 0.0, 1.0);
-  vec3 col = mix(vec3(1.0, 0.1, 0.1), vec3(0.1, 0.3, 1.0), t);
-  float dist = length(gl_PointCoord - vec2(0.5));
-  float alpha = smoothstep(0.5, 0.0, dist);
-  fragColor = vec4(col, alpha);
+    // Color blend based on depth (red close, blue far)
+    float t = clamp(vDepth / 50.0, 0.0, 1.0);
+    vec3 col = mix(vec3(1.0, 0.1, 0.1), vec3(0.1, 0.3, 1.0), t);
+    // Create circular particle shape
+    float dist = length(gl_PointCoord - vec2(0.5));
+    float alpha = smoothstep(0.5, 0.0, dist);
+    fragColor = vec4(col, alpha);
 }
 `;
 
 function compileShader(type, src) {
-  const s = gl.createShader(type);
-  gl.shaderSource(s, src);
-  gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-    throw new Error(gl.getShaderInfoLog(s));
-  return s;
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+        throw new Error(gl.getShaderInfoLog(s));
+    return s;
 }
 
 const prog = gl.createProgram();
@@ -76,15 +81,15 @@ gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, vsSource));
 gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fsSource));
 gl.linkProgram(prog);
 if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
-  throw new Error(gl.getProgramInfoLog(prog));
+    throw new Error(gl.getProgramInfoLog(prog));
 gl.useProgram(prog);
 
 const numParticles = 5000;
 const positions = new Float32Array(numParticles * 3);
 for (let i = 0; i < numParticles * 3; i += 3) {
-  positions[i] = (Math.random() - 0.5) * 40;
-  positions[i + 1] = (Math.random() - 0.5) * 40;
-  positions[i + 2] = (Math.random() - 0.5) * 40;
+    positions[i] = (Math.random() - 0.5) * 40;
+    positions[i + 1] = (Math.random() - 0.5) * 40;
+    positions[i + 2] = (Math.random() - 0.5) * 40;
 }
 
 const vao = gl.createVertexArray();
@@ -103,26 +108,26 @@ const uView = gl.getUniformLocation(prog, 'uView');
 const uPointSize = gl.getUniformLocation(prog, 'uPointSize');
 
 function mat4Perspective(out, fov, aspect, near, far) {
-  const f = 1.0 / Math.tan(fov / 2);
-  out[0] = f / aspect; out[1] = 0; out[2] = 0; out[3] = 0;
-  out[4] = 0; out[5] = f; out[6] = 0; out[7] = 0;
-  out[8] = 0; out[9] = 0; out[10] = (far + near) / (near - far); out[11] = -1;
-  out[12] = 0; out[13] = 0; out[14] = (2 * far * near) / (near - far); out[15] = 0;
-  return out;
+    const f = 1.0 / Math.tan(fov / 2);
+    out[0] = f / aspect; out[1] = 0; out[2] = 0; out[3] = 0;
+    out[4] = 0; out[5] = f; out[6] = 0; out[7] = 0;
+    out[8] = 0; out[9] = 0; out[10] = (far + near) / (near - far); out[11] = -1;
+    out[12] = 0; out[13] = 0; out[14] = (2 * far * near) / (near - far); out[15] = 0;
+    return out;
 }
 
 function mat4LookAt(out, eye, center, up) {
-  const f = normalize(sub(center, eye));
-  const s = normalize(cross(f, up));
-  const u = cross(s, f);
-  out[0] = s[0]; out[1] = u[0]; out[2] = -f[0]; out[3] = 0;
-  out[4] = s[1]; out[5] = u[1]; out[6] = -f[1]; out[7] = 0;
-  out[8] = s[2]; out[9] = u[2]; out[10] = -f[2]; out[11] = 0;
-  out[12] = -dot(s, eye);
-  out[13] = -dot(u, eye);
-  out[14] = dot(f, eye);
-  out[15] = 1;
-  return out;
+    const f = normalize(sub(center, eye));
+    const s = normalize(cross(f, up));
+    const u = cross(s, f);
+    out[0] = s[0]; out[1] = u[0]; out[2] = -f[0]; out[3] = 0;
+    out[4] = s[1]; out[5] = u[1]; out[6] = -f[1]; out[7] = 0;
+    out[8] = s[2]; out[9] = u[2]; out[10] = -f[2]; out[11] = 0;
+    out[12] = -dot(s, eye);
+    out[13] = -dot(u, eye);
+    out[14] = dot(f, eye);
+    out[15] = 1;
+    return out;
 }
 
 function sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
@@ -130,43 +135,123 @@ function cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[
 function dot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
 function normalize(a) { const l=Math.hypot(...a); return [a[0]/l,a[1]/l,a[2]/l]; }
 
+// --- Interaction State ---
 let yaw = 0, pitch = 0, distance = 60;
 let dragging = false, lastX = 0, lastY = 0;
+let lastPinchDist = null;
+const DRAG_SENSITIVITY = 0.005;
+const PINCH_SENSITIVITY = 0.5;
 
-canvas.addEventListener('mousedown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+// --- Mouse and Wheel for desktop fallback (original code) ---
+canvas.addEventListener('mousedown', e => { 
+    dragging = true; 
+    lastX = e.clientX; 
+    lastY = e.clientY; 
+    lastPinchDist = null; // Clear pinch state
+});
 canvas.addEventListener('mouseup', () => dragging = false);
 canvas.addEventListener('mousemove', e => {
-  if (dragging) {
-    yaw += (e.clientX - lastX) * 0.005;
-    pitch += (e.clientY - lastY) * 0.005;
-    lastX = e.clientX; lastY = e.clientY;
-  }
+    if (dragging) {
+        yaw += (e.clientX - lastX) * DRAG_SENSITIVITY;
+        pitch += (e.clientY - lastY) * DRAG_SENSITIVITY;
+        lastX = e.clientX; 
+        lastY = e.clientY;
+    }
 });
 canvas.addEventListener('wheel', e => {
-  distance += e.deltaY * 0.01;
-  distance = Math.max(10, Math.min(200, distance));
+    distance += e.deltaY * 0.01;
+    distance = Math.max(10, Math.min(200, distance));
 });
+
+// --- Touch Handlers for mobile/touch screens ---
+
+// Utility to calculate distance between two touch points for pinch
+function getTouchDistance(touches) {
+    if (touches.length < 2) return null;
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault(); // Prevent default browser actions like scrolling
+    if (e.touches.length === 1) {
+        // Single touch for rotation
+        dragging = true;
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+        lastPinchDist = null; // Reset pinch state
+    } else if (e.touches.length === 2) {
+        // Two touches for pinching (zoom)
+        dragging = false; // Disable rotation
+        lastPinchDist = getTouchDistance(e.touches);
+    }
+});
+
+canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (e.touches.length === 1 && dragging) {
+        // Single touch for rotation
+        const currentX = e.touches[0].clientX;
+        const currentY = e.touches[0].clientY;
+        yaw += (currentX - lastX) * DRAG_SENSITIVITY * 1.5; // Slightly faster touch rotation
+        pitch += (currentY - lastY) * DRAG_SENSITIVITY * 1.5;
+        lastX = currentX;
+        lastY = currentY;
+    } else if (e.touches.length === 2 && lastPinchDist !== null) {
+        // Two touches for pinching (zoom)
+        const currentPinchDist = getTouchDistance(e.touches);
+        const delta = currentPinchDist - lastPinchDist;
+        
+        // Zoom in/out based on change in distance
+        // Pinching *out* (distance increases) should *decrease* the camera distance (zoom in)
+        distance -= delta * PINCH_SENSITIVITY; 
+        distance = Math.max(10, Math.min(200, distance)); // Clamp distance
+        lastPinchDist = currentPinchDist;
+    }
+});
+
+canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    dragging = false;
+    lastPinchDist = null;
+    
+    // Check if the remaining touches are one, and reset for potential single-touch rotation
+    if (e.touches.length === 1) {
+        dragging = true;
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+    }
+});
+// --- End Touch Handlers ---
 
 gl.enable(gl.BLEND);
 gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
 gl.clearColor(0, 0, 0, 1);
 
 function animate() {
-  requestAnimationFrame(animate);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  const aspect = canvas.width / canvas.height;
-  const projection = mat4Perspective(new Float32Array(16), Math.PI/4, aspect, 0.1, 500);
-  const eye = [
-    distance * Math.cos(pitch) * Math.sin(yaw),
-    distance * Math.sin(pitch),
-    distance * Math.cos(pitch) * Math.cos(yaw)
-  ];
-  const view = mat4LookAt(new Float32Array(16), eye, [0,0,0], [0,1,0]);
-  gl.uniformMatrix4fv(uProjection, false, projection);
-  gl.uniformMatrix4fv(uView, false, view);
-  gl.uniform1f(uPointSize, 120.0);
-  gl.bindVertexArray(vao);
-  gl.drawArrays(gl.POINTS, 0, numParticles);
+    requestAnimationFrame(animate);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    
+    // Clamp pitch to prevent camera flipping (looking straight up or down)
+    pitch = Math.max(-Math.PI/2 + 0.01, Math.min(Math.PI/2 - 0.01, pitch));
+    
+    const aspect = canvas.width / canvas.height;
+    const projection = mat4Perspective(new Float32Array(16), Math.PI/4, aspect, 0.1, 500);
+    
+    // Calculate the camera (eye) position based on spherical coordinates
+    const eye = [
+        distance * Math.cos(pitch) * Math.sin(yaw),
+        distance * Math.sin(pitch),
+        distance * Math.cos(pitch) * Math.cos(yaw)
+    ];
+    const view = mat4LookAt(new Float32Array(16), eye, [0,0,0], [0,1,0]); // Look at the origin
+    
+    gl.uniformMatrix4fv(uProjection, false, projection);
+    gl.uniformMatrix4fv(uView, false, view);
+    gl.uniform1f(uPointSize, 120.0);
+    gl.bindVertexArray(vao);
+    gl.drawArrays(gl.POINTS, 0, numParticles);
 }
 animate();
 </script>
