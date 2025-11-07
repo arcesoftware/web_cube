@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>3D Depth Particles (Touch-Enabled)</title>
+    <title>3D Depth Particles (Fixed Size & Multi-Touch Color)</title>
     <style>
         html, body {
             margin: 0;
             height: 100%;
             overflow: hidden;
             background: radial-gradient(circle at center, #000010, #000);
-            /* Prevent default touch actions like pull-to-refresh on some devices */
+            /* Include touch-action: none for touch-enabled version */
             touch-action: none; 
         }
         canvas {
@@ -27,14 +27,24 @@ const canvas = document.getElementById('glcanvas');
 const gl = canvas.getContext('webgl2', { antialias: false });
 if (!gl) alert('WebGL2 not supported');
 
-canvas.width = innerWidth;
-canvas.height = innerHeight;
-
-window.addEventListener('resize', () => {
+// --- Helper function to handle resizing ---
+function resizeCanvas() {
+    // 1. Set the canvas's internal drawing buffer size to match the visible CSS size
     canvas.width = innerWidth;
     canvas.height = innerHeight;
+    
+    // 2. Update the WebGL viewport to use the new drawing buffer dimensions
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-});
+}
+
+// --- Initial Resize Fix ---
+resizeCanvas(); 
+
+// --- Resize Listener (for window/screen change) ---
+window.addEventListener('resize', resizeCanvas);
+
+// --- New Global State for Color Control ---
+let colorDepthFactor = 50.0; // Corresponds to the '50.0' in the fragment shader
 
 const vsSource = `#version 300 es
 precision highp float;
@@ -47,8 +57,7 @@ void main() {
     vec4 viewPos = uView * vec4(aPos, 1.0);
     vDepth = -viewPos.z;
     gl_Position = uProjection * viewPos;
-    // Scale point size inversely proportional to depth, and slightly less aggressively
-    gl_PointSize = uPointSize / (vDepth * 0.2); 
+    gl_PointSize = uPointSize / (vDepth * 0.2);
 }
 `;
 
@@ -56,10 +65,16 @@ const fsSource = `#version 300 es
 precision highp float;
 in float vDepth;
 out vec4 fragColor;
+
+// New uniform for controlling the color depth transition
+uniform float uColorDepthFactor; 
+
 void main() {
     // Color blend based on depth (red close, blue far)
-    float t = clamp(vDepth / 50.0, 0.0, 1.0);
+    // Using the new uniform to control the color transition point
+    float t = clamp(vDepth / uColorDepthFactor, 0.0, 1.0);
     vec3 col = mix(vec3(1.0, 0.1, 0.1), vec3(0.1, 0.3, 1.0), t);
+    
     // Create circular particle shape
     float dist = length(gl_PointCoord - vec2(0.5));
     float alpha = smoothstep(0.5, 0.0, dist);
@@ -106,6 +121,8 @@ gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
 const uProjection = gl.getUniformLocation(prog, 'uProjection');
 const uView = gl.getUniformLocation(prog, 'uView');
 const uPointSize = gl.getUniformLocation(prog, 'uPointSize');
+// Get location for the new uniform
+const uColorDepthFactor = gl.getUniformLocation(prog, 'uColorDepthFactor');
 
 function mat4Perspective(out, fov, aspect, near, far) {
     const f = 1.0 / Math.tan(fov / 2);
@@ -139,15 +156,20 @@ function normalize(a) { const l=Math.hypot(...a); return [a[0]/l,a[1]/l,a[2]/l];
 let yaw = 0, pitch = 0, distance = 60;
 let dragging = false, lastX = 0, lastY = 0;
 let lastPinchDist = null;
+let lastColorY = 0; // For three-finger drag
 const DRAG_SENSITIVITY = 0.005;
 const PINCH_SENSITIVITY = 0.5;
+const COLOR_SENSITIVITY = 0.5; // How much the vertical drag affects the color factor
 
-// --- Mouse and Wheel for desktop fallback (original code) ---
+// --- Mouse and Wheel for desktop fallback ---
 canvas.addEventListener('mousedown', e => { 
-    dragging = true; 
-    lastX = e.clientX; 
-    lastY = e.clientY; 
-    lastPinchDist = null; // Clear pinch state
+    // Only start dragging if no control key (like Ctrl) is pressed
+    if (!e.ctrlKey) {
+        dragging = true; 
+        lastX = e.clientX; 
+        lastY = e.clientY; 
+    }
+    lastPinchDist = null;
 });
 canvas.addEventListener('mouseup', () => dragging = false);
 canvas.addEventListener('mousemove', e => {
@@ -159,8 +181,17 @@ canvas.addEventListener('mousemove', e => {
     }
 });
 canvas.addEventListener('wheel', e => {
-    distance += e.deltaY * 0.01;
-    distance = Math.max(10, Math.min(200, distance));
+    if (e.ctrlKey) {
+        // Handle Ctrl + Wheel for color depth control
+        e.preventDefault(); 
+        colorDepthFactor += e.deltaY * 0.5;
+        // Clamp the factor to a reasonable range
+        colorDepthFactor = Math.max(1.0, Math.min(200.0, colorDepthFactor)); 
+    } else {
+        // Standard wheel for distance control
+        distance += e.deltaY * 0.01;
+        distance = Math.max(10, Math.min(200, distance));
+    }
 });
 
 // --- Touch Handlers for mobile/touch screens ---
@@ -174,40 +205,53 @@ function getTouchDistance(touches) {
 }
 
 canvas.addEventListener('touchstart', e => {
-    e.preventDefault(); // Prevent default browser actions like scrolling
+    e.preventDefault(); 
     if (e.touches.length === 1) {
         // Single touch for rotation
         dragging = true;
         lastX = e.touches[0].clientX;
         lastY = e.touches[0].clientY;
-        lastPinchDist = null; // Reset pinch state
+        lastPinchDist = null;
     } else if (e.touches.length === 2) {
-        // Two touches for pinching (zoom)
-        dragging = false; // Disable rotation
+        // Two touches for zooming
+        dragging = false; 
         lastPinchDist = getTouchDistance(e.touches);
+    } else if (e.touches.length === 3) {
+        // Three touches for color depth control
+        dragging = false; 
+        lastColorY = e.touches[0].clientY;
     }
 });
 
 canvas.addEventListener('touchmove', e => {
     e.preventDefault();
     if (e.touches.length === 1 && dragging) {
-        // Single touch for rotation
+        // Single touch: Rotation
         const currentX = e.touches[0].clientX;
         const currentY = e.touches[0].clientY;
-        yaw += (currentX - lastX) * DRAG_SENSITIVITY * 1.5; // Slightly faster touch rotation
+        yaw += (currentX - lastX) * DRAG_SENSITIVITY * 1.5;
         pitch += (currentY - lastY) * DRAG_SENSITIVITY * 1.5;
         lastX = currentX;
         lastY = currentY;
     } else if (e.touches.length === 2 && lastPinchDist !== null) {
-        // Two touches for pinching (zoom)
+        // Two touches: Zooming
         const currentPinchDist = getTouchDistance(e.touches);
         const delta = currentPinchDist - lastPinchDist;
-        
-        // Zoom in/out based on change in distance
-        // Pinching *out* (distance increases) should *decrease* the camera distance (zoom in)
         distance -= delta * PINCH_SENSITIVITY; 
-        distance = Math.max(10, Math.min(200, distance)); // Clamp distance
+        distance = Math.max(10, Math.min(200, distance));
         lastPinchDist = currentPinchDist;
+    } else if (e.touches.length === 3) {
+        // Three touches: Color Depth Control
+        const currentY = e.touches[0].clientY;
+        const deltaY = currentY - lastColorY;
+        
+        // Dragging DOWN (positive deltaY) decreases the color factor (brighter red/less blue)
+        // Dragging UP (negative deltaY) increases the color factor (darker blue/more depth)
+        colorDepthFactor -= deltaY * COLOR_SENSITIVITY; 
+        
+        // Clamp the factor to a reasonable range (1.0 to 200.0)
+        colorDepthFactor = Math.max(1.0, Math.min(200.0, colorDepthFactor)); 
+        lastColorY = currentY;
     }
 });
 
@@ -215,6 +259,7 @@ canvas.addEventListener('touchend', e => {
     e.preventDefault();
     dragging = false;
     lastPinchDist = null;
+    lastColorY = 0; // Reset three-finger state
     
     // Check if the remaining touches are one, and reset for potential single-touch rotation
     if (e.touches.length === 1) {
@@ -233,23 +278,24 @@ function animate() {
     requestAnimationFrame(animate);
     gl.clear(gl.COLOR_BUFFER_BIT);
     
-    // Clamp pitch to prevent camera flipping (looking straight up or down)
     pitch = Math.max(-Math.PI/2 + 0.01, Math.min(Math.PI/2 - 0.01, pitch));
     
     const aspect = canvas.width / canvas.height;
     const projection = mat4Perspective(new Float32Array(16), Math.PI/4, aspect, 0.1, 500);
-    
-    // Calculate the camera (eye) position based on spherical coordinates
     const eye = [
         distance * Math.cos(pitch) * Math.sin(yaw),
         distance * Math.sin(pitch),
         distance * Math.cos(pitch) * Math.cos(yaw)
     ];
-    const view = mat4LookAt(new Float32Array(16), eye, [0,0,0], [0,1,0]); // Look at the origin
+    const view = mat4LookAt(new Float32Array(16), eye, [0,0,0], [0,1,0]);
     
     gl.uniformMatrix4fv(uProjection, false, projection);
     gl.uniformMatrix4fv(uView, false, view);
     gl.uniform1f(uPointSize, 120.0);
+    
+    // Pass the dynamic color depth factor to the shader
+    gl.uniform1f(uColorDepthFactor, colorDepthFactor); 
+    
     gl.bindVertexArray(vao);
     gl.drawArrays(gl.POINTS, 0, numParticles);
 }
