@@ -1,239 +1,259 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>BioDigital | Particle Depth Ontology</title>
-    
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "VisualDataset",
-      "name": "3D Depth Particle Field",
-      "description": "A WebGL2 simulation mapping 5,000 entities to a 3D coordinate system with depth-based color interpolation.",
-      "variableMeasured": [
-        { "@type": "PropertyValue", "name": "Yaw", "unitCode": "RAD" },
-        { "@type": "PropertyValue", "name": "Pitch", "unitCode": "RAD" },
-        { "@type": "PropertyValue", "name": "ColorDepthFactor", "value": "50.0" }
-      ]
+#include <SDL3/SDL.h>
+#include <vector>
+#include <cmath>
+#include <algorithm>
+
+struct Vec3 { float x, y, z; };
+struct Particle { Vec3 pos; SDL_Color color; };
+
+enum Mode {
+    IMPLICIT,
+    SDF_SHAPE,
+    FRACTAL,
+    LORENZ,
+    AIZAWA
+};
+
+int WIDTH = 1280;
+int HEIGHT = 800;
+
+std::vector<Particle> particles;
+Mode currentMode = IMPLICIT;
+
+// Camera
+float camYaw = 0.0f;
+float camPitch = 0.0f;
+float camDist = 120.0f;
+bool mouseDown = false;
+
+// ------------------ MATH ------------------
+
+float implicitFunc(float x, float y, float z) {
+    return std::sin(x * 0.2f) +
+        std::sin(y * 0.2f) +
+        std::sin(z * 0.2f) +
+        std::sin(x * y * 0.02f) -
+        std::cos(z * x * 0.02f);
+}
+
+float sdf(Vec3 p) {
+    float sphere = sqrt(p.x * p.x + p.y * p.y + p.z * p.z) - 15.0f;
+    float waves = sin(p.x * 0.3f) * sin(p.y * 0.3f) * sin(p.z * 0.3f);
+    return sphere + waves * 4.0f;
+}
+
+float mandelbulb(Vec3 p) {
+    Vec3 z = p;
+    float r = 0.0f;
+
+    for (int i = 0; i < 8; i++) {
+        r = sqrt(z.x * z.x + z.y * z.y + z.z * z.z);
+        if (r > 2.0f) break;
+
+        float theta = acos(z.z / (r + 0.0001f));
+        float phi = atan2(z.y, z.x);
+        float power = 6.0f;
+
+        float zr = pow(r, power);
+        theta *= power;
+        phi *= power;
+
+        z = {
+            zr * sin(theta) * cos(phi),
+            zr * sin(theta) * sin(phi),
+            zr * cos(theta)
+        };
+
+        z.x += p.x;
+        z.y += p.y;
+        z.z += p.z;
     }
-    </script>
 
-    <style>
-        :root {
-            --ui-cyan: #00f2ff;
-            --ui-bg: #000005;
-        }
-        html, body {
-            margin: 0; height: 100%; overflow: hidden;
-            background: var(--ui-bg); touch-action: none; 
-            font-family: 'Segoe UI', system-ui, sans-serif;
-        }
-        canvas { display: block; width: 100%; height: 100%; }
-
-        /* Semantic HUD Components */
-        header {
-            position: fixed; top: 20px; left: 20px; z-index: 10;
-            border-left: 2px solid var(--ui-cyan); padding-left: 15px;
-            pointer-events: none;
-        }
-        .hud-label {
-            font-size: 10px; color: var(--ui-cyan); text-transform: uppercase;
-            letter-spacing: 2px; opacity: 0.8;
-        }
-        .hud-value { font-size: 18px; color: #fff; margin-bottom: 10px; }
-
-        /* Hidden Table for Web Crawlers / Screen Readers */
-        .semantic-bridge {
-            position: absolute; width: 1px; height: 1px; padding: 0;
-            margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;
-        }
-    </style>
-</head>
-<body>
-
-    <header>
-        <section aria-label="Simulation Metadata">
-            <div class="hud-label">Subject</div>
-            <div class="hud-value">Stellar_Cloud_V5</div>
-            
-            <div class="hud-label">Linked_Data_URI</div>
-            <div class="hud-value" style="font-size: 10px;">http://data.biodigital.io/particles/5k</div>
-        </section>
-        
-        <section aria-label="Real-time Metrics">
-            <div class="hud-label">Color_Depth_Factor</div>
-            <div id="depth-val" class="hud-value">50.0</div>
-        </section>
-    </header>
-
-    <main role="main">
-        <canvas id="glcanvas" aria-label="3D Interactive Particle Field"></canvas>
-    </main>
-
-    <article class="semantic-bridge" aria-live="polite">
-        <h2>Dataset Statistics</h2>
-        <p>Current View Coordinates: <span id="sem-coords">Yaw: 0, Pitch: 0</span></p>
-        <p>Entities Rendered: 5,000 Points</p>
-    </article>
-
-    <footer style="position:fixed; bottom:10px; right:10px; color:var(--ui-cyan); font-size:9px; opacity:0.5;">
-        [WEBGL2_CORE] // [SEMANTIC_ENHANCED]
-    </footer>
-
-<script type="module">
-const canvas = document.getElementById('glcanvas');
-const depthDisplay = document.getElementById('depth-val');
-const semCoords = document.getElementById('sem-coords');
-const gl = canvas.getContext('webgl2', { antialias: false });
-
-if (!gl) alert('WebGL2 not supported');
-
-function resizeCanvas() {
-    canvas.width = innerWidth;
-    canvas.height = innerHeight;
-    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-}
-resizeCanvas(); 
-window.addEventListener('resize', resizeCanvas);
-
-// --- Shaders ---
-const vsSource = `#version 300 es
-precision highp float;
-in vec3 aPos;
-uniform mat4 uProjection, uView;
-uniform float uPointSize;
-out float vDepth;
-void main() {
-    vec4 viewPos = uView * vec4(aPos, 1.0);
-    vDepth = -viewPos.z;
-    gl_Position = uProjection * viewPos;
-    gl_PointSize = uPointSize / (vDepth * 0.2);
-}
-`;
-
-const fsSource = `#version 300 es
-precision highp float;
-in float vDepth;
-uniform float uColorDepthFactor; 
-out vec4 fragColor;
-void main() {
-    float t = clamp(vDepth / uColorDepthFactor, 0.0, 1.0);
-    vec3 col = mix(vec3(0.0, 0.95, 1.0), vec3(1.0, 0.0, 0.5), t); // Cyan to Magenta
-    float dist = length(gl_PointCoord - vec2(0.5));
-    float alpha = smoothstep(0.5, 0.2, dist);
-    fragColor = vec4(col, alpha);
-}
-`;
-
-// [Shader Compilation omitted for brevity, remains same as your original]
-function compileShader(type, src) {
-    const s = gl.createShader(type);
-    gl.shaderSource(s, src);
-    gl.compileShader(s);
-    return s;
-}
-const prog = gl.createProgram();
-gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, vsSource));
-gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fsSource));
-gl.linkProgram(prog);
-gl.useProgram(prog);
-
-// --- Data Population ---
-const numParticles = 5000;
-const positions = new Float32Array(numParticles * 3);
-for (let i = 0; i < numParticles * 3; i++) positions[i] = (Math.random() - 0.5) * 40;
-
-const vao = gl.createVertexArray();
-gl.bindVertexArray(vao);
-const vbo = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-const loc = gl.getAttribLocation(prog, 'aPos');
-gl.enableVertexAttribArray(loc);
-gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-
-const uProjection = gl.getUniformLocation(prog, 'uProjection');
-const uView = gl.getUniformLocation(prog, 'uView');
-const uPointSize = gl.getUniformLocation(prog, 'uPointSize');
-const uColorDepthFactor = gl.getUniformLocation(prog, 'uColorDepthFactor');
-
-// --- State & Interaction ---
-let yaw = 0, pitch = 0, distance = 60, colorDepthFactor = 50.0;
-let dragging = false, lastX = 0, lastY = 0;
-
-// Update Semantic DOM (The Bridge)
-function syncSemanticState() {
-    depthDisplay.innerText = colorDepthFactor.toFixed(1);
-    semCoords.innerText = `Yaw: ${yaw.toFixed(2)}, Pitch: ${pitch.toFixed(2)}`;
+    return r;
 }
 
-canvas.addEventListener('mousedown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
-window.addEventListener('mouseup', () => dragging = false);
-window.addEventListener('mousemove', e => {
-    if (dragging) {
-        yaw += (e.clientX - lastX) * 0.005;
-        pitch += (e.clientY - lastY) * 0.005;
-        lastX = e.clientX; lastY = e.clientY;
-        syncSemanticState();
+// ------------------ GENERATORS ------------------
+
+void generateImplicit() {
+    particles.clear();
+
+    for (float x = -30; x < 30; x += 1.2f)
+        for (float y = -30; y < 30; y += 1.2f)
+            for (float z = -30; z < 30; z += 1.2f) {
+
+                float v = implicitFunc(x, y, z);
+
+                if (fabs(v) < 0.25f) {
+                    Uint8 r = (Uint8)((sin(x * 0.1f) + 1) * 127);
+                    Uint8 g = (Uint8)((sin(y * 0.1f) + 1) * 127);
+                    Uint8 b = (Uint8)((sin(z * 0.1f) + 1) * 127);
+
+                    particles.push_back({ {x,y,z},{r,g,b,255} });
+                }
+            }
+}
+
+void generateSDF() {
+    particles.clear();
+
+    for (float x = -30; x < 30; x += 1.2f)
+        for (float y = -30; y < 30; y += 1.2f)
+            for (float z = -30; z < 30; z += 1.2f) {
+
+                float d = sdf({ x,y,z });
+
+                if (fabs(d) < 0.6f) {
+                    Uint8 r = (Uint8)(255 - fabs(d) * 200);
+                    Uint8 g = (Uint8)(120 + fabs(d) * 80);
+                    Uint8 b = 255;
+
+                    particles.push_back({ {x,y,z},{r,g,b,255} });
+                }
+            }
+}
+
+void generateFractal() {
+    particles.clear();
+
+    for (float x = -2; x < 2; x += 0.08f)
+        for (float y = -2; y < 2; y += 0.08f)
+            for (float z = -2; z < 2; z += 0.08f) {
+
+                float m = mandelbulb({ x,y,z });
+
+                if (m < 2.0f) {
+                    Uint8 c = (Uint8)(m * 120);
+                    particles.push_back({ {x * 20,y * 20,z * 20},{c, c, 255,255} });
+                }
+            }
+}
+
+// 🔥 Lorenz Attractor
+void generateLorenz() {
+    particles.clear();
+
+    float x = 0.1f, y = 0.0f, z = 0.0f;
+    float dt = 0.01f;
+
+    float a = 10.0f, b = 28.0f, c = 8.0f / 3.0f;
+
+    for (int i = 0; i < 50000; i++) {
+        float dx = a * (y - x);
+        float dy = x * (b - z) - y;
+        float dz = x * y - c * z;
+
+        x += dx * dt;
+        y += dy * dt;
+        z += dz * dt;
+
+        Uint8 r = (Uint8)(fabs(x) * 10);
+        Uint8 g = (Uint8)(fabs(y) * 10);
+        Uint8 bcol = (Uint8)(fabs(z) * 10);
+
+        particles.push_back({ {x,y,z},{r,g,bcol,255} });
     }
-});
-canvas.addEventListener('wheel', e => {
-    if (e.ctrlKey) {
-        e.preventDefault();
-        colorDepthFactor = Math.max(1, Math.min(200, colorDepthFactor + e.deltaY * 0.1));
-    } else {
-        distance = Math.max(10, Math.min(200, distance + e.deltaY * 0.05));
+}
+
+// 🔥 Aizawa Attractor
+void generateAizawa() {
+    particles.clear();
+
+    float x = 0.1f, y = 0, z = 0;
+    float dt = 0.01f;
+
+    float a = 0.95f, b = 0.7f, c = 0.6f, d = 3.5f, e = 0.25f, f = 0.1f;
+
+    for (int i = 0; i < 50000; i++) {
+        float dx = (z - b) * x - d * y;
+        float dy = d * x + (z - b) * y;
+        float dz = c + a * z - (z * z * z) / 3.0f - (x * x + y * y) * (1 + e * z) + f * z * (x * x * x);
+
+        x += dx * dt;
+        y += dy * dt;
+        z += dz * dt;
+
+        Uint8 r = (Uint8)(fabs(x) * 40);
+        Uint8 g = (Uint8)(fabs(y) * 40);
+        Uint8 bcol = (Uint8)(fabs(z) * 40);
+
+        particles.push_back({ {x * 10,y * 10,z * 10},{r,g,bcol,255} });
     }
-    syncSemanticState();
-}, {passive: false});
-
-// --- Math Helpers ---
-function mat4Perspective(out, fov, aspect, near, far) {
-    const f = 1.0 / Math.tan(fov / 2);
-    out.fill(0);
-    out[0] = f / aspect; out[5] = f; out[10] = (far + near) / (near - far);
-    out[11] = -1; out[14] = (2 * far * near) / (near - far);
-    return out;
 }
-function mat4LookAt(out, eye, center, up) {
-    const f = normalize(sub(center, eye)), s = normalize(cross(f, up)), u = cross(s, f);
-    out[0] = s[0]; out[1] = u[0]; out[2] = -f[0]; out[3] = 0;
-    out[4] = s[1]; out[5] = u[1]; out[6] = -f[1]; out[7] = 0;
-    out[8] = s[2]; out[9] = u[2]; out[10] = -f[2]; out[11] = 0;
-    out[12] = -dot(s, eye); out[13] = -dot(u, eye); out[14] = dot(f, eye); out[15] = 1;
-    return out;
-}
-function sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
-function cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
-function dot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
-function normalize(a) { const l=Math.hypot(...a); return [a[0]/l,a[1]/l,a[2]/l]; }
 
-gl.enable(gl.BLEND);
-gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+// ------------------ INPUT ------------------
 
-function animate() {
-    requestAnimationFrame(animate);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    
-    const aspect = canvas.width / canvas.height;
-    const projection = mat4Perspective(new Float32Array(16), Math.PI/4, aspect, 0.1, 500);
-    const eye = [
-        distance * Math.cos(pitch) * Math.sin(yaw),
-        distance * Math.sin(pitch),
-        distance * Math.cos(pitch) * Math.cos(yaw)
-    ];
-    const view = mat4LookAt(new Float32Array(16), eye, [0,0,0], [0,1,0]);
-    
-    gl.uniformMatrix4fv(uProjection, false, projection);
-    gl.uniformMatrix4fv(uView, false, view);
-    gl.uniform1f(uPointSize, 150.0);
-    gl.uniform1f(uColorDepthFactor, colorDepthFactor); 
-    
-    gl.bindVertexArray(vao);
-    gl.drawArrays(gl.POINTS, 0, numParticles);
+void handleMouse(SDL_Event& e) {
+    if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) mouseDown = true;
+    if (e.type == SDL_EVENT_MOUSE_BUTTON_UP) mouseDown = false;
+
+    if (e.type == SDL_EVENT_MOUSE_MOTION && mouseDown) {
+        camYaw += e.motion.xrel * 0.005f;
+        camPitch += e.motion.yrel * 0.005f;
+        camPitch = std::clamp(camPitch, -1.5f, 1.5f);
+    }
 }
-animate();
-</script>
-</body>
-</html>
+
+// ------------------ MAIN ------------------
+
+int main(int argc, char* argv[]) {
+
+    SDL_Init(SDL_INIT_VIDEO);
+
+    SDL_Window* window = SDL_CreateWindow("Math Engine", WIDTH, HEIGHT, SDL_WINDOW_RESIZABLE);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, NULL);
+
+    generateImplicit();
+
+    bool running = true;
+    SDL_Event e;
+
+    while (running) {
+
+        while (SDL_PollEvent(&e)) {
+
+            if (e.type == SDL_EVENT_QUIT) running = false;
+
+            handleMouse(e);
+
+            if (e.type == SDL_EVENT_KEY_DOWN) {
+                if (e.key.key == SDLK_1) { currentMode = IMPLICIT; generateImplicit(); }
+                if (e.key.key == SDLK_2) { currentMode = SDF_SHAPE; generateSDF(); }
+                if (e.key.key == SDLK_3) { currentMode = FRACTAL; generateFractal(); }
+                if (e.key.key == SDLK_4) { currentMode = LORENZ; generateLorenz(); }
+                if (e.key.key == SDLK_5) { currentMode = AIZAWA; generateAizawa(); }
+            }
+        }
+
+        const bool* keys = SDL_GetKeyboardState(NULL);
+        if (keys[SDL_SCANCODE_W]) camDist -= 2.0f;
+        if (keys[SDL_SCANCODE_S]) camDist += 2.0f;
+
+        SDL_SetRenderDrawColor(renderer, 5, 5, 10, 255);
+        SDL_RenderClear(renderer);
+
+        float cY = cos(-camYaw), sY = sin(-camYaw);
+        float cP = cos(-camPitch), sP = sin(-camPitch);
+
+        for (auto& p : particles) {
+
+            float rx = p.pos.x * cY - p.pos.z * sY;
+            float rz_t = p.pos.x * sY + p.pos.z * cY;
+
+            float ry = p.pos.y * cP - rz_t * sP;
+            float rz = p.pos.y * sP + rz_t * cP + camDist;
+
+            if (rz > 1.0f) {
+                float sx = rx * 800.0f / rz + WIDTH / 2;
+                float sy = ry * 800.0f / rz + HEIGHT / 2;
+
+                SDL_SetRenderDrawColor(renderer, p.color.r, p.color.g, p.color.b, 255);
+                SDL_RenderPoint(renderer, sx, sy);
+            }
+        }
+
+        SDL_RenderPresent(renderer);
+    }
+
+    SDL_Quit();
+    return 0;
+}
